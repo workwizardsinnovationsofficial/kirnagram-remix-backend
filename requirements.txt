@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+pymongo
+firebase-admin
+python-dotenv
+motor
+boto3
+botocore
+Pillow
+httpx
+google-generativeai
+requests
+python-multipart
+openai
+razorpay
+celery
