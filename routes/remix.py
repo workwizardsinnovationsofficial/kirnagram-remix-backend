@@ -63,6 +63,57 @@ async def get_my_remixes(authorization: str = Header(...)):
     return response_data
 
 # ==========================================================
+# GET USER REMIX HISTORY
+# ==========================================================
+async def _resolve_profile_user_id(identifier: str) -> str:
+    # Accept firebase_uid, username, public_id, or legacy _id strings.
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise HTTPException(status_code=400, detail="Invalid user identifier")
+
+    identifier = identifier.strip()
+    if identifier.startswith("@"):
+        identifier = identifier[1:]
+
+    # If this already looks like an ObjectId, check `_id` first.
+    if ObjectId.is_valid(identifier):
+        user = await db.users.find_one({"$or": [{"firebase_uid": identifier}, {"_id": ObjectId(identifier)}, {"username": identifier}, {"public_id": identifier}]})
+    else:
+        user = await db.users.find_one({"$or": [{"firebase_uid": identifier}, {"username": identifier}, {"public_id": identifier}]})
+
+    if user:
+        return user.get("firebase_uid") or str(user.get("_id"))
+
+    raise HTTPException(status_code=404, detail="User not found")
+
+@router.get("/user/{target_user_id}/remixes")
+async def get_user_remixes(target_user_id: str, authorization: str = Header(...)):
+    get_user_id(authorization)  # Validate token
+
+    resolved_uid = await _resolve_profile_user_id(target_user_id)
+
+    remixes = await db.ai_creator_remixes.find(
+        {"user_id": resolved_uid}
+    ).sort("created_at", -1).to_list(length=None)
+
+    result = []
+    for remix in remixes:
+        result.append({
+            "id": str(remix["_id"]),
+            "image_url": remix.get("output_image"),
+            "prompt_id": remix.get("prompt_id"),
+            "ratio": remix.get("ratio"),
+            "payout_per_remix": int(remix.get("payout_per_remix", 1) or 1),
+            "created_at": remix.get("created_at")
+        })
+
+    response_data = {
+        "total": len(result),
+        "remixes": result
+    }
+    print(f"📤 [get_user_remixes] RETURNING RESPONSE: total={response_data['total']} remixes for target_user_id={target_user_id} resolved_uid={resolved_uid}")
+    return response_data
+
+# ==========================================================
 # GET SPECIFIC REMIX
 # ==========================================================
 @router.get("/{remix_id}")
@@ -251,6 +302,16 @@ async def get_prompt_remixes(prompt_id: str, authorization: str = Header(...)):
 # AUTH
 # ============================================================
 def get_user_id(authorization: str) -> str:
+    import os
+
+    # Development bypass: set DEV_BYPASS_AUTH=true in .env to allow testing
+    # - If Authorization header is `Bearer dev:<uid>` the <uid> will be used
+    # - Otherwise the `DEV_TEST_UID` env var is used (defaults to 'dev-user')
+    if os.getenv("DEV_BYPASS_AUTH", "").strip().lower() == "true":
+        if authorization and authorization.startswith("Bearer dev:"):
+            return authorization.split(":", 1)[1]
+        return os.getenv("DEV_TEST_UID", "dev-user")
+
     if not authorization or " " not in authorization:
         raise HTTPException(status_code=401, detail="Invalid authorization header")
     token = authorization.split(" ")[1]
